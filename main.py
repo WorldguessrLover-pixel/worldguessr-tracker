@@ -39,19 +39,24 @@ def send_telegram_message(message: str):
 def fetch_leaderboard():
     response = requests.get(API_URL)
     if response.status_code == 200:
-        return response.json()
+        data = response.json()
+        # ✅ On récupère bien la liste de joueurs sous la clé "leaderboard"
+        return data.get("leaderboard", [])
     else:
         print("Erreur API:", response.status_code)
-        return None
+        return []
 
 # --- Comparaison ---
-def compare_and_update(new_data):
+def compare_and_update(players):
     conn = get_db_conn()
     cur = conn.cursor()
 
-    for player in new_data:
-        name = player["username"]
-        elo = player["elo"]
+    for player in players:
+        name = player.get("username")
+        elo = player.get("elo")
+
+        if elo is None:
+            continue
 
         if elo >= 8000:
             cur.execute("SELECT elo FROM players WHERE username = %s", (name,))
@@ -78,9 +83,11 @@ def compare_and_update(new_data):
 
 def main():
     init_db()
-    new_data = fetch_leaderboard()
-    if new_data:
-        compare_and_update(new_data)
+    players = fetch_leaderboard()
+    if players:
+        compare_and_update(players)
+    else:
+        print("⚠️ Aucun joueur récupéré depuis l'API.")
 
 if __name__ == "__main__":
     main()
