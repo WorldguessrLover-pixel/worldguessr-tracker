@@ -1,5 +1,2 @@
 requests
-sqlalchemy
 psycopg2-binary
-discord-webhook
-rich
