@@ -1,6 +1,9 @@
 import os
 import psycopg2
 import requests
+from flask import Flask, jsonify
+
+app = Flask(__name__)
 
 # --- Variables d'environnement ---
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -53,34 +56,27 @@ def compare_and_update(data):
     for idx, player in enumerate(data["leaderboard"]):
         name = player["username"]
         elo = player["elo"]
-        position = idx + 1  # 1er joueur = position 1, etc.
+        position = idx + 1  # classement
 
-        # Vérifie si le joueur est déjà en base
         cur.execute("SELECT elo FROM players WHERE username=%s", (name,))
         row = cur.fetchone()
 
         if row:
             old_elo = row[0]
             if elo != old_elo:
-                # Différentes notifs selon le seuil
                 if elo >= 10000:
                     message = f"⚡ #{position} {name} a changé d’ELO : {old_elo} ➝ {elo}"
                 elif elo >= 8000:
                     message = f"🔔 #{position} {name} a changé d’ELO : {old_elo} ➝ {elo}"
                 else:
                     continue
-
-                # Ajoute distinction si 1er ou 2ème
                 if position == 1:
-                    message = "👑 " + message  # Premier mondial
+                    message = "👑 " + message
                 elif position == 2:
-                    message = "🥈 " + message  # Deuxième mondial
-
+                    message = "🥈 " + message
                 send_telegram(message)
                 cur.execute("UPDATE players SET elo=%s WHERE username=%s", (elo, name))
-
         else:
-            # Nouveau joueur au-dessus de 8000
             if elo >= 8000:
                 message = f"🆕 Nouveau joueur #{position} : {name} ➝ {elo} ELO"
                 if position == 1:
@@ -94,12 +90,18 @@ def compare_and_update(data):
     cur.close()
     conn.close()
 
-# --- Main ---
-def main():
-    init_db()
-    data = fetch_data()
-    if data:
-        compare_and_update(data)
+# --- Route Flask pour UptimeRobot ---
+@app.route("/check")
+def check():
+    try:
+        init_db()
+        data = fetch_data()
+        if data:
+            compare_and_update(data)
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
+# --- Lancement Flask ---
 if __name__ == "__main__":
-    main()
+    app.run(host="0.0.0.0", port=10000)
