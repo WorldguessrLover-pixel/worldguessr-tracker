@@ -1,23 +1,21 @@
 import os
-import psycopg2
 import requests
-from flask import Flask, jsonify
+import psycopg2
+from flask import Flask
 
 app = Flask(__name__)
 
-# --- Variables d'environnement ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-API_URL = "https://api.worldguessr.com/api/leaderboard"
+def get_data():
+    resp = requests.get("https://api.worldguessr.com/api/leaderboard")
+    resp.raise_for_status()
+    return resp.json().get("leaderboard", [])
 
-# --- Connexion PostgreSQL ---
-def get_connection():
-    return psycopg2.connect(DATABASE_URL)
-
-def init_db():
-    conn = get_connection()
+def compare_and_update(new_data):
+    conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS players (
@@ -26,82 +24,50 @@ def init_db():
         )
     """)
     conn.commit()
-    cur.close()
-    conn.close()
 
-# --- Envoi Telegram ---
-def send_telegram(message: str):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-    try:
-        requests.post(url, json=payload)
-    except Exception as e:
-        print("Erreur envoi Telegram:", e)
-
-# --- Récupération API ---
-def fetch_data():
-    try:
-        resp = requests.get(API_URL, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        print("Erreur API:", e)
-        return None
-
-# --- Comparaison et update ---
-def compare_and_update(data):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    for idx, player in enumerate(data["leaderboard"]):
+    for player in new_data:
         name = player["username"]
         elo = player["elo"]
-        position = idx + 1  # classement
 
-        cur.execute("SELECT elo FROM players WHERE username=%s", (name,))
-        row = cur.fetchone()
+        if elo < 8000:
+            continue
 
-        if row:
-            old_elo = row[0]
-            if elo != old_elo:
+        cur.execute("SELECT elo FROM players WHERE username = %s", (name,))
+        result = cur.fetchone()
+
+        if result:
+            old_elo = result[0]
+            if old_elo != elo:
+                cur.execute("UPDATE players SET elo = %s WHERE username = %s", (elo, name))
+                conn.commit()
+                msg = f"🔔 {name} a changé d’ELO : {old_elo} → {elo}"
                 if elo >= 10000:
-                    message = f"⚡ #{position} {name} a changé d’ELO : {old_elo} ➝ {elo}"
-                elif elo >= 8000:
-                    message = f"🔔 #{position} {name} a changé d’ELO : {old_elo} ➝ {elo}"
-                else:
-                    continue
-                if position == 1:
-                    message = "👑 " + message
-                elif position == 2:
-                    message = "🥈 " + message
-                send_telegram(message)
-                cur.execute("UPDATE players SET elo=%s WHERE username=%s", (elo, name))
+                    msg = f"⚡ {name} dépasse les 10 000 ELO ! ({old_elo} → {elo})"
+                requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                              json={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
         else:
-            if elo >= 8000:
-                message = f"🆕 Nouveau joueur #{position} : {name} ➝ {elo} ELO"
-                if position == 1:
-                    message = "👑 " + message
-                elif position == 2:
-                    message = "🥈 " + message
-                send_telegram(message)
             cur.execute("INSERT INTO players (username, elo) VALUES (%s, %s)", (name, elo))
+            conn.commit()
+            if elo >= 8000:
+                msg = f"🆕 Nouveau joueur au-dessus de 8000 ELO : {name} ({elo})"
+                requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                              json={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
 
-    conn.commit()
     cur.close()
     conn.close()
 
-# --- Route Flask pour UptimeRobot ---
+
+@app.route("/")
+def home():
+    return "✅ WorldGuessr Tracker is running!", 200
+
+
 @app.route("/check")
 def check():
-    try:
-        init_db()
-        data = fetch_data()
-        if data:
-            compare_and_update(data)
-        return jsonify({"status": "ok"}), 200
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    compare_and_update(get_data())
+    return "✅ Check completed", 200
 
-# --- Lancement Flask ---
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
