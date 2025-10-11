@@ -1,71 +1,33 @@
 import os
 import requests
 import psycopg2
-from psycopg2.extras import RealDictCursor
-from flask import Flask
 
-app = Flask(__name__)
-
-# 🔧 Variables d'environnement (Render)
-DB_URL = os.getenv("DATABASE_URL")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-API_URL = "https://api.worldguessr.com/api/leaderboard"
+
+def get_data():
+    resp = requests.get("https://api.worldguessr.com/api/leaderboard")
+    resp.raise_for_status()
+    return resp.json().get("leaderboard", [])
 
 
-# 🔔 Envoi d'un message Telegram
-def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print("Erreur Telegram:", e)
-
-
-# 🧩 Connexion à la base PostgreSQL
-def get_db_connection():
-    return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
-
-
-# 🏗️ Création de la table au besoin
-def setup_database():
-    conn = get_db_connection()
+def compare_and_update(new_data):
+    conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
     cur.execute("""
         CREATE TABLE IF NOT EXISTS players (
             username TEXT PRIMARY KEY,
-            elo INTEGER,
-            rank INTEGER
-        );
+            elo INTEGER
+        )
     """)
     conn.commit()
-    cur.close()
-    conn.close()
 
-
-# 🌍 Récupération du leaderboard depuis l’API
-def fetch_leaderboard():
-    try:
-        response = requests.get(API_URL, timeout=10)
-        data = response.json()
-        return data.get("leaderboard", [])
-    except Exception as e:
-        print("Erreur API:", e)
-        return []
-
-
-# ⚙️ Comparaison et mise à jour
-def compare_and_update(new_data):
-    conn = get_db_connection()
-    cur = conn.cursor()
-
-    for rank, player in enumerate(new_data, start=1):
+    for player in new_data:
         name = player["username"]
         elo = player["elo"]
 
-        # Ignore les joueurs < 8000 elo
         if elo < 8000:
             continue
 
@@ -73,39 +35,31 @@ def compare_and_update(new_data):
         result = cur.fetchone()
 
         if result:
-            old_elo = result["elo"]
+            old_elo = result[0]
             if old_elo != elo:
-                # 🔥 Message unique (plus de “dépasse 10000”)
-                msg = f"⚡ #{rank} {name} a changé d’ELO : {old_elo} → {elo}"
-                send_telegram_message(msg)
-                cur.execute(
-                    "UPDATE players SET elo = %s, rank = %s WHERE username = %s",
-                    (elo, rank, name)
-                )
+                cur.execute("UPDATE players SET elo = %s WHERE username = %s", (elo, name))
+                conn.commit()
+                msg = f"🔔 {name} a changé d’ELO : {old_elo} → {elo}"
+                if elo >= 10000:
+                    msg = f"⚡ {name} dépasse les 10 000 ELO ! ({old_elo} → {elo})"
+                requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                              json={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
         else:
-            # Nouveau joueur haut ELO
-            cur.execute(
-                "INSERT INTO players (username, elo, rank) VALUES (%s, %s, %s)",
-                (name, elo, rank)
-            )
+            cur.execute("INSERT INTO players (username, elo) VALUES (%s, %s)", (name, elo))
+            conn.commit()
+            if elo >= 8000:
+                msg = f"🆕 Nouveau joueur au-dessus de 8000 ELO : {name} ({elo})"
+                requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                              json={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
 
-    conn.commit()
     cur.close()
     conn.close()
 
 
-# 🌐 Route principale (avec HEAD support)
-@app.route("/", methods=["GET", "HEAD"])
-def home():
-    new_data = fetch_leaderboard()
-    if new_data:
-        compare_and_update(new_data)
-        return "Leaderboard checked successfully ✅", 200
-    else:
-        return "Erreur lors de la récupération du leaderboard ❌", 500
+def main():
+    new_data = get_data()
+    compare_and_update(new_data)
 
 
-# 🚀 Lancement sur Render
 if __name__ == "__main__":
-    setup_database()
-    app.run(host="0.0.0.0", port=10000)
+    main()
