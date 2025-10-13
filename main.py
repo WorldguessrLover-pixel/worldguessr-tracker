@@ -41,23 +41,20 @@ def compare_and_update(new_data):
                 cur.execute("UPDATE players SET elo = %s WHERE username = %s", (elo, name))
                 conn.commit()
                 msg = f"🔔 {name} a changé d’ELO : {old_elo} → {elo}"
-                if elo >= 10000:
-                    msg = f"⚡ {name} dépasse les 10 000 ELO ! ({old_elo} → {elo})"
                 requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                               json={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
         else:
             cur.execute("INSERT INTO players (username, elo) VALUES (%s, %s)", (name, elo))
             conn.commit()
-            if elo >= 8000:
-                msg = f"🆕 Nouveau joueur au-dessus de 8000 ELO : {name} ({elo})"
-                requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                              json={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
+            msg = f"🆕 Nouveau joueur au-dessus de 8000 ELO : {name} ({elo})"
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                          json={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
 
     cur.close()
     conn.close()
 
 
-@app.route("/")
+@app.route("/", methods=["GET", "HEAD"])
 def home():
     return "✅ WorldGuessr Tracker is running!", 200
 
@@ -69,5 +66,5 @@ def check():
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT"))
+    app.run(host="0.0.0.0", port=port, debug=False)
