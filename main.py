@@ -1,6 +1,7 @@
 import os
 import requests
 import psycopg2
+import threading
 from flask import Flask
 
 app = Flask(__name__)
@@ -9,10 +10,12 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+
 def get_data():
     resp = requests.get("https://api.worldguessr.com/api/leaderboard")
     resp.raise_for_status()
     return resp.json().get("leaderboard", [])
+
 
 def compare_and_update(new_data):
     conn = psycopg2.connect(DATABASE_URL)
@@ -61,8 +64,9 @@ def home():
 
 @app.route("/check")
 def check():
-    compare_and_update(get_data())
-    return "✅ Check completed", 200
+    # 🚀 On lance le check en arrière-plan
+    threading.Thread(target=lambda: compare_and_update(get_data())).start()
+    return "🕓 Check lancé en arrière-plan ✅", 200
 
 
 if __name__ == "__main__":
