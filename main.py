@@ -5,20 +5,18 @@ from flask import Flask, request
 
 app = Flask(__name__)
 
-# --- Configuration des variables d'environnement ---
+# --- Variables d'environnement ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-
-# --- Fonction pour récupérer les données depuis l'API ---
+# --- Récupération des données depuis l'API ---
 def get_data():
     resp = requests.get("https://api.worldguessr.com/api/leaderboard")
     resp.raise_for_status()
     return resp.json().get("leaderboard", [])
 
-
-# --- Fonction principale : comparaison et mise à jour ---
+# --- Comparaison et mise à jour ---
 def compare_and_update(new_data):
     conn = psycopg2.connect(DATABASE_URL)
     cur = conn.cursor()
@@ -34,7 +32,6 @@ def compare_and_update(new_data):
         name = player["username"]
         elo = player["elo"]
 
-        # On ignore les joueurs faibles
         if elo < 8000:
             continue
 
@@ -49,38 +46,41 @@ def compare_and_update(new_data):
                 msg = f"🔔 {name} a changé d’ELO : {old_elo} → {elo}"
                 if elo >= 10000:
                     msg = f"⚡ {name} dépasse les 10 000 ELO ! ({old_elo} → {elo})"
-                requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                              json={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
+                requests.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                    json={"chat_id": TELEGRAM_CHAT_ID, "text": msg}
+                )
         else:
             cur.execute("INSERT INTO players (username, elo) VALUES (%s, %s)", (name, elo))
             conn.commit()
             if elo >= 8000:
                 msg = f"🆕 Nouveau joueur au-dessus de 8000 ELO : {name} ({elo})"
-                requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                              json={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
+                requests.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                    json={"chat_id": TELEGRAM_CHAT_ID, "text": msg}
+                )
 
     cur.close()
     conn.close()
 
-
-# --- Route de base pour UptimeRobot (avec HEAD supporté) ---
+# --- Route principale ---
 @app.route("/", methods=["GET", "HEAD"])
 def home():
-    if request.method == "HEAD":
-        return "", 200
     return "✅ WorldGuessr Tracker is running!", 200
 
-
-# --- Route de vérification manuelle ---
+# --- Route de vérification ---
 @app.route("/check", methods=["GET", "HEAD"])
 def check():
-    if request.method == "HEAD":
-        return "", 200
-    compare_and_update(get_data())
-    return "✅ Check completed", 200
+    print(f"🔁 Triggered by {request.method} /check")
+    try:
+        compare_and_update(get_data())
+        print("✅ Check completed successfully.")
+        return "✅ Check completed", 200
+    except Exception as e:
+        print(f"❌ Error during check: {e}")
+        return f"❌ Error: {e}", 500
 
-
-# --- Lancement du serveur Flask ---
+# --- Lancement du serveur ---
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
